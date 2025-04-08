@@ -1,3 +1,23 @@
+这是docker容器版，让大家免于配置python环境的烦恼。
+安装docker之后可以使用以下`compose.yaml`启动容器：
+
+```yaml
+services:
+  web:
+    image: gordianz/flowtrack
+    environment:
+      "DEEPSEEK_API_KEY": "你的DS API KEY"
+    ports:
+      - 8501:8501
+```
+将API KEY替换为你自己的KEY之后保存为`compose.yaml`，在该目录下运行下面的命令即可访问 http://localhost:8501 使用该工具。
+```bash
+docker compose up
+```
+以下是原项目的介绍：
+
+
+
 # Binance资金流向分析工具
 
 ## 项目简介

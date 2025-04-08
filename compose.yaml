@@ -1,0 +1,7 @@
+services:
+  web:
+    image: gordianz/flowtrack
+    environment:
+      "DEEPSEEK_API_KEY": "你的DS API KEY"
+    ports:
+      - 8501:8501
