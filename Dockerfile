@@ -6,4 +6,4 @@ RUN pip install requests pandas numpy streamlit
 
 COPY . .
 
-CMD [ "python", "./binance_funding_flow_analyzer.py" ]
+CMD [ "streamlit", "run ./binance_funding_flow_analyzer.py" ]
