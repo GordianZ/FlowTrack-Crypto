@@ -1,440 +1,646 @@
+import streamlit as st
 import requests
-import pandas as pd
-import numpy as np
-from datetime import datetime
-import time
-import concurrent.futures
-import telegram
-from telegram.ext import Updater
 import json
-import pickle
-from ratelimit import limits, sleep_and_retry
-from binance.client import Client
-from typing import Dict, List
+import time
+import numpy as np
+import pandas as pd
 import logging
-from scipy import stats
+from datetime import datetime, timedelta
+import os
 
 # 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Binance API 端点
-SPOT_BASE_URL = "https://api.binance.com/api/v3"
-FUTURES_BASE_URL = "https://fapi.binance.com/fapi/v1"
-
-# DeepSeek API 配置
+# 设置API密钥和URL
+BINANCE_API_URL = "https://api.binance.com"
+BINANCE_FUTURES_API_URL = "https://fapi.binance.com"
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "api信息")
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
-DEEPSEEK_API_KEY = ""  # 替换为实际的API Key
 
-# Binance 客户端初始化
-BINANCE_API_KEY = ""  # 替换为你的Binance API Key
-BINANCE_API_SECRET = ""  # 替换为你的Binance API Secret
-client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+# 设置页面标题和布局
+st.set_page_config(
+    page_title="币安资金流向分析",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# 固定交易对
-SYMBOLS = ['BTCUSDT', 'ETHUSDT']
+# 自定义CSS，使界面更专业
+st.markdown("""
+<style>
+    /* 整体主题 */
+    .main {
+        background-color: #0e1117;
+        color: #d1d1d1;
+    }
+
+    /* 标题样式 */
+    h1, h2, h3 {
+        color: #4da6ff;
+        font-weight: 600;
+        margin-bottom: 1.5rem;
+    }
+
+    h1 {
+        border-bottom: 2px solid #4da6ff;
+        padding-bottom: 0.5rem;
+    }
+
+    /* 按钮样式 */
+    .stButton>button {
+        background-color: #2e6da4;
+        color: white;
+        border-radius: 4px;
+        border: none;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+        transition: all 0.2s ease;
+    }
+
+    .stButton>button:hover {
+        background-color: #1c4c7d;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.4);
+        transform: translateY(-1px);
+    }
+
+    /* 侧边栏样式 */
+    .css-1d391kg {
+        background-color: #171c2e;
+        border-right: 1px solid #2c3454;
+    }
+
+    /* 进度条样式 */
+    .stProgress > div > div {
+        background-color: #4da6ff;
+    }
+
+    /* 数据框样式 */
+    div[data-testid="stDataFrame"] {
+        border: 1px solid #2c3454;
+        border-radius: 5px;
+        padding: 1px;
+    }
+
+    /* 卡片样式 */
+    div.stBlock {
+        border: 1px solid #2c3454;
+        border-radius: 5px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+        background-color: #1a1f36;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+
+    /* 输入框样式 */
+    .stTextInput>div>div>input {
+        background-color: #171c2e;
+        color: #d1d1d1;
+        border: 1px solid #2c3454;
+        border-radius: 4px;
+    }
+
+    /* 选择框样式 */
+    .stSelectbox>div>div>div {
+        background-color: #171c2e;
+        color: #d1d1d1;
+        border: 1px solid #2c3454;
+    }
+
+    /* 标签样式 */
+    .symbol-tag {
+        display: inline-block;
+        background-color: #2e6da4;
+        color: white;
+        padding: 0.3rem 0.6rem;
+        margin: 0.2rem;
+        border-radius: 4px;
+        font-size: 0.9rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+
+    /* 分析结果容器 */
+    .analysis-container {
+        background-color: #1a1f36;
+        border: 1px solid #2c3454;
+        border-radius: 5px;
+        padding: 1.5rem;
+        margin-top: 1rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+
+    /* 表格样式 */
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 1rem 0;
+    }
+
+    th, td {
+        padding: 0.75rem;
+        border: 1px solid #2c3454;
+    }
+
+    th {
+        background-color: #171c2e;
+        color: #4da6ff;
+        font-weight: 500;
+    }
+
+    tr:nth-child(even) {
+        background-color: #171c2e;
+    }
+
+    /* 代码块样式 */
+    code {
+        background-color: #171c2e;
+        color: #4da6ff;
+        padding: 0.2rem 0.4rem;
+        border-radius: 3px;
+        font-size: 0.9em;
+    }
+
+    /* 链接样式 */
+    a {
+        color: #4da6ff;
+        text-decoration: none;
+    }
+
+    a:hover {
+        text-decoration: underline;
+    }
+
+    /* 分隔线样式 */
+    hr {
+        border: none;
+        height: 1px;
+        background-color: #2c3454;
+        margin: 2rem 0;
+    }
+
+    /* 警告和错误信息样式 */
+    .stAlert {
+        background-color: #1a1f36;
+        border: 1px solid #ff4b4b;
+        color: #ff4b4b;
+    }
+
+    /* 信息提示样式 */
+    .stInfo {
+        background-color: #1a1f36;
+        border: 1px solid #4da6ff;
+        color: #4da6ff;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# 初始化会话状态
+if 'symbols' not in st.session_state:
+    st.session_state.symbols = ["BTCUSDT", "ETHUSDT"]
+if 'started_analysis' not in st.session_state:
+    st.session_state.started_analysis = False
+if 'analysis_results' not in st.session_state:
+    st.session_state.analysis_results = None
+if 'new_symbol' not in st.session_state:
+    st.session_state.new_symbol = ""
+if 'interval' not in st.session_state:
+    st.session_state.interval = '5m'
+if 'error_message' not in st.session_state:
+    st.session_state.error_message = None
 
 
-def format_number(value):
-    """将数值格式化为K/M表示，保留两位小数"""
-    if abs(value) >= 1000000:
-        return f"{value / 1000000:.2f}M"
-    elif abs(value) >= 1000:
-        return f"{value / 1000:.2f}K"
-    else:
-        return f"{value:.2f}"
+# 添加交易对函数
+def add_symbol():
+    if st.session_state.new_symbol and st.session_state.new_symbol.strip():
+        symbol = st.session_state.new_symbol.strip().upper()
+        if symbol not in st.session_state.symbols:
+            st.session_state.symbols.append(symbol)
+        st.session_state.new_symbol = ""
 
 
-@sleep_and_retry
-@limits(calls=20, period=1)
-def get_klines_data(symbol: str, interval: str = '5m', limit: int = 50, is_futures: bool = False) -> List[Dict]:
-    """获取K线数据，并剔除最新的一根（未完成的）"""
-    try:
-        base_url = FUTURES_BASE_URL if is_futures else SPOT_BASE_URL
-        endpoint = "/klines"
-        params = {'symbol': symbol, 'interval': interval, 'limit': limit}
-        response = requests.get(f"{base_url}{endpoint}", params=params)
-        data = response.json()
-
-        if len(data) < 2:
-            logger.warning(f"需要至少2根K线数据，但{symbol}只返回了{len(data)}根")
-            return []
-
-        # 剔除最新的一根K线（未完成的）
-        data = data[:-1]
-
-        results = []
-        for k in data:
-            open_time = datetime.fromtimestamp(k[0] / 1000).strftime('%Y-%m-%d %H:%M:%S')
-            close_time = datetime.fromtimestamp(k[6] / 1000).strftime('%Y-%m-%d %H:%M:%S')
-
-            results.append({
-                'symbol': symbol,
-                'open_time': open_time,
-                'close_time': close_time,
-                'open': float(k[1]),
-                'high': float(k[2]),
-                'low': float(k[3]),
-                'close': float(k[4]),
-                'volume': float(k[5]),
-                'quote_volume': float(k[7]),
-                'trades': int(k[8]),
-                'taker_buy_base_volume': float(k[9]),
-                'taker_buy_quote_volume': float(k[10]),
-                'net_inflow': float(k[10]) - (float(k[7]) - float(k[10])),  # 买方成交量 - 卖方成交量
-                'timestamp': k[0]  # 保存时间戳用于排序
-            })
-
-        return results
-    except Exception as e:
-        logger.error(f"获取{symbol} K线数据时出错: {e}")
-        return []
+# 删除交易对函数
+def remove_symbol(symbol):
+    if symbol in st.session_state.symbols:
+        st.session_state.symbols.remove(symbol)
+        st.rerun()
 
 
-@sleep_and_retry
-@limits(calls=20, period=1)
-def get_orderbook_stats(symbol: str, is_futures: bool = False, retries: int = 3) -> Dict:
-    """获取单个交易对的深度统计数据（现货5000档，期货1000档）"""
-    limit = 1000 if is_futures else 5000  # 期货支持最大1000档，现货支持5000档
-    for attempt in range(retries):
+# 开始分析函数
+def start_analysis():
+    st.session_state.error_message = None
+    if st.session_state.symbols:
+        st.session_state.started_analysis = True
         try:
-            if is_futures:
-                orderbook = client.futures_order_book(symbol=symbol, limit=limit)
-                current_price = float(client.futures_symbol_ticker(symbol=symbol)['price'])
-            else:
-                orderbook = client.get_order_book(symbol=symbol, limit=limit)
-                current_price = float(client.get_symbol_ticker(symbol=symbol)['price'])
-
-            bids = [(float(bid[0]), float(bid[1])) for bid in orderbook['bids']]
-            asks = [(float(ask[0]), float(ask[1])) for ask in orderbook['asks']]
-
-            # 计算买卖盘总量和总价值
-            bids_volume = sum(amount for _, amount in bids)
-            asks_volume = sum(amount for _, amount in asks)
-            bids_value = sum(price * amount for price, amount in bids)
-            asks_value = sum(price * amount for price, amount in asks)
-
-            # 计算买卖盘不平衡度
-            volume_imbalance = (bids_volume - asks_volume) / (bids_volume + asks_volume) if (
-                                                                                                        bids_volume + asks_volume) > 0 else 0
-            value_imbalance = (bids_value - asks_value) / (bids_value + asks_value) if (
-                                                                                                   bids_value + asks_value) > 0 else 0
-
-            # 计算关键价格区间内的买卖盘量
-            price_range_pct = 0.005  # 当前价格上下0.5%范围
-            lower_bound = current_price * (1 - price_range_pct)
-            upper_bound = current_price * (1 + price_range_pct)
-
-            near_bids_volume = sum(amount for price, amount in bids if price >= lower_bound)
-            near_asks_volume = sum(amount for price, amount in asks if price <= upper_bound)
-            near_volume_imbalance = (near_bids_volume - near_asks_volume) / (near_bids_volume + near_asks_volume) if (
-                                                                                                                                 near_bids_volume + near_asks_volume) > 0 else 0
-
-            return {
-                'symbol': symbol,
-                'price': current_price,
-                'bids_count': len(bids),
-                'asks_count': len(asks),
-                'bids_volume': bids_volume,
-                'asks_volume': asks_volume,
-                'bids_value': bids_value,
-                'asks_value': asks_value,
-                'volume_imbalance': volume_imbalance,
-                'value_imbalance': value_imbalance,
-                'near_volume_imbalance': near_volume_imbalance
-            }
+            # 这里调用您的分析函数
+            results = run_analysis(st.session_state.symbols)
+            st.session_state.analysis_results = results
         except Exception as e:
-            logger.error(f"获取 {symbol} orderbook 失败 (尝试 {attempt + 1}/{retries}): {e}")
-            if attempt < retries - 1:
-                time.sleep(1)
-            else:
-                return None
-    return None
+            st.session_state.error_message = f"分析过程中发生错误: {str(e)}"
+            logger.error(f"分析错误: {e}", exc_info=True)
+    else:
+        st.session_state.error_message = "请至少添加一个交易对"
 
 
-def analyze_funding_flow_trend(klines_data: List[Dict]) -> Dict:
-    """分析资金流向趋势，预测价格所处阶段"""
-    if not klines_data or len(klines_data) < 10:
-        return {
-            'trend': 'unknown',
-            'confidence': 0,
-            'description': '数据不足，无法分析'
+
+
+# 侧边栏
+st.sidebar.title("分析设置")
+
+# 在侧边栏中添加时间间隔选择
+st.sidebar.subheader("K线时间间隔")
+interval_options = ["5m", "15m", "30m", "1h", "4h","1d"]
+selected_interval = st.sidebar.selectbox(
+    "选择时间间隔",
+    options=interval_options,
+    index=interval_options.index(st.session_state.interval)
+)
+
+# 将选择的时间间隔保存到会话状态
+st.session_state.interval = selected_interval
+
+# 添加交易对输入框和按钮 - 移至侧边栏
+st.sidebar.subheader("添加交易对")
+st.sidebar.text_input("输入交易对（例如：BTCUSDT）", key="new_symbol")
+st.sidebar.button("添加交易对", on_click=add_symbol)
+
+# 显示已添加的交易对 - 移至侧边栏
+st.sidebar.subheader("已添加的交易对")
+for symbol in st.session_state.symbols:
+    col1, col2 = st.sidebar.columns([3, 1])
+    with col1:
+        st.write(f"• {symbol}")
+    with col2:
+        if st.button("删除", key=f"del_{symbol}"):
+            remove_symbol(symbol)
+
+# 添加开始分析按钮 - 移至侧边栏
+st.sidebar.markdown("---")
+st.sidebar.button("开始分析", on_click=start_analysis, type="primary")
+
+# 显示错误信息（如果有）
+if st.session_state.error_message:
+    st.error(st.session_state.error_message)
+
+# 如果没有开始分析，显示欢迎页面
+if not st.session_state.started_analysis:
+    st.title("欢迎使用币安资金流向分析系统")
+
+    st.write("本系统可以帮助您分析币安交易所的资金流向，识别主力资金行为，判断市场趋势。")
+
+    st.header("主要功能")
+    st.markdown("- **资金流向趋势分析**：分析现货和期货市场的资金流入流出趋势")
+    st.markdown("- **主力资金行为解读**：识别主力资金的建仓、出货行为")
+    st.markdown("- **价格阶段判断**：判断各交易对处于什么阶段（顶部、底部、上涨中、下跌中、整理中）")
+    st.markdown("- **短期趋势预判**：预判未来可能的价格走势")
+    st.markdown("- **交易策略建议**：针对每个交易对，给出具体的交易建议")
+
+    st.header("使用方法")
+    st.markdown("1. 在侧边栏添加您想要分析的交易对（例如：BTCUSDT、ETHUSDT等）")
+    st.markdown("2. 选择K线时间间隔（5分钟、15分钟、30分钟、1小时、4小时，日线）")
+    st.markdown("3. 点击“开始分析”按钮，等待分析完成")
+    st.markdown("4. 等待分析完成，查看详细分析结果")
+
+# 如果已经开始分析，显示分析结果
+if st.session_state.started_analysis and st.session_state.analysis_results:
+    st.markdown("""
+    <div class="analysis-container">
+        <h2>资金流向分析结果</h2>
+        <p>分析周期：{} | 分析时间：{}</p>
+    </div>
+    """.format(st.session_state.interval, datetime.now().strftime('%Y-%m-%d %H:%M:%S')), unsafe_allow_html=True)
+
+    st.markdown(st.session_state.analysis_results)
+
+
+# 数据获取和分析函数
+def format_number(num):
+    """格式化数字，保留适当的小数位数"""
+    if isinstance(num, (int, float)):
+        if abs(num) >= 1000:
+            return f"{num:.2f}"
+        elif abs(num) >= 1:
+            return f"{num:.4f}"
+        else:
+            return f"{num:.8f}"
+    return num
+
+
+def get_klines_data(symbol, interval="5m", limit=50, is_futures=False):
+    """获取K线数据"""
+    try:
+        base_url = BINANCE_FUTURES_API_URL if is_futures else BINANCE_API_URL
+        endpoint = "/fapi/v1/klines" if is_futures else "/api/v3/klines"
+
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit + 1  # 多获取一根，用于计算最后一根的变化
         }
 
-    # 按时间排序
-    sorted_data = sorted(klines_data, key=lambda x: x['timestamp'])
+        response = requests.get(f"{base_url}{endpoint}", params=params)
+        response.raise_for_status()
 
-    # 提取价格和资金流向数据
-    prices = [k['close'] for k in sorted_data]
-    net_inflows = [k['net_inflow'] for k in sorted_data]
-    volumes = [k['quote_volume'] for k in sorted_data]
+        klines = response.json()
 
-    # 计算价格趋势
-    price_changes = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
-    price_trend = sum(1 for change in price_changes if change > 0) / len(price_changes)
+        # 移除最后一根未完成的K线
+        klines = klines[:-1]
 
-    # 计算资金流向趋势
-    inflow_changes = [net_inflows[i] - net_inflows[i - 1] for i in range(1, len(net_inflows))]
-    inflow_trend = sum(1 for change in inflow_changes if change > 0) / len(inflow_changes)
+        # 处理K线数据
+        processed_klines = []
+        for i, kline in enumerate(klines):
+            open_time = datetime.fromtimestamp(kline[0] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+            close_time = datetime.fromtimestamp(kline[6] / 1000).strftime('%Y-%m-%d %H:%M:%S')
 
-    # 计算成交量趋势
-    volume_changes = [volumes[i] - volumes[i - 1] for i in range(1, len(volumes))]
-    volume_trend = sum(1 for change in volume_changes if change > 0) / len(volume_changes)
+            open_price = float(kline[1])
+            high_price = float(kline[2])
+            low_price = float(kline[3])
+            close_price = float(kline[4])
+            volume = float(kline[5])
+            quote_asset_volume = float(kline[7])
 
-    # 计算价格与资金流向的相关性
-    correlation = np.corrcoef(prices, net_inflows)[0, 1]
+            # 计算买入和卖出量（简化估算）
+            if close_price >= open_price:
+                # 上涨K线，假设60%的成交量是买入
+                buy_volume = volume * 0.6
+                sell_volume = volume * 0.4
+            else:
+                # 下跌K线，假设40%的成交量是买入
+                buy_volume = volume * 0.4
+                sell_volume = volume * 0.6
 
-    # 计算资金流向与成交量的相关性
-    inflow_volume_corr = np.corrcoef(net_inflows, volumes)[0, 1]
+            # 计算净流入资金
+            net_inflow = (buy_volume - sell_volume) * close_price
 
-    # 计算价格波动率
-    price_volatility = np.std(price_changes) / np.mean(prices) if np.mean(prices) != 0 else 0
+            # 计算价格变化百分比
+            price_change_pct = ((close_price - open_price) / open_price) * 100
 
-    # 使用线性回归分析价格趋势
-    x = np.arange(len(prices))
-    slope, _, r_value, p_value, _ = stats.linregress(x, prices)
-    price_trend_strength = abs(r_value)
-    price_trend_direction = 'up' if slope > 0 else 'down'
+            processed_kline = {
+                "open_time": open_time,
+                "close_time": close_time,
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
+                "volume": volume,
+                "quote_volume": quote_asset_volume,
+                "buy_volume": buy_volume,
+                "sell_volume": sell_volume,
+                "net_inflow": net_inflow,
+                "price_change_pct": price_change_pct
+            }
 
-    # 使用线性回归分析资金流向趋势
-    inflow_slope, _, inflow_r_value, inflow_p_value, _ = stats.linregress(x, net_inflows)
-    inflow_trend_strength = abs(inflow_r_value)
-    inflow_trend_direction = 'increasing' if inflow_slope > 0 else 'decreasing'
+            processed_klines.append(processed_kline)
 
-    # 分析最近的资金流向变化
-    recent_inflows = net_inflows[-10:]
-    recent_inflow_trend = sum(1 for i in range(1, len(recent_inflows)) if recent_inflows[i] > recent_inflows[i - 1]) / (
-                len(recent_inflows) - 1)
+        return processed_klines
 
-    # 根据各种指标判断价格所处阶段
-    stage = 'unknown'
-    confidence = 0
-    reasons = []
+    except Exception as e:
+        logger.error(f"获取K线数据出错: {e}")
+        raise Exception(f"获取{symbol} {interval}K线数据失败: {str(e)}")
 
-    # 顶部特征
-    if (price_trend > 0.7 and inflow_trend < 0.3 and correlation < -0.3):
-        stage = 'top'
-        confidence = min(0.7 + price_trend - inflow_trend - correlation, 0.95)
-        reasons = [
-            "价格持续上涨但资金流入减少",
-            "价格与资金流向呈负相关",
-            f"价格趋势强度: {price_trend_strength:.2f}, 资金流向趋势强度: {inflow_trend_strength:.2f}"
-        ]
 
-    # 底部特征
-    elif (price_trend < 0.3 and inflow_trend > 0.7 and correlation < -0.3):
-        stage = 'bottom'
-        confidence = min(0.7 - price_trend + inflow_trend - correlation, 0.95)
-        reasons = [
-            "价格持续下跌但资金流入增加",
-            "价格与资金流向呈负相关",
-            f"价格趋势强度: {price_trend_strength:.2f}, 资金流向趋势强度: {inflow_trend_strength:.2f}"
-        ]
+def get_orderbook_stats(symbol, is_futures=False, limit=1000):
+    """获取订单簿数据并计算统计信息"""
+    try:
+        base_url = BINANCE_FUTURES_API_URL if is_futures else BINANCE_API_URL
+        endpoint = "/fapi/v1/depth" if is_futures else "/api/v3/depth"
 
-    # 上涨中特征
-    elif (price_trend > 0.6 and inflow_trend > 0.6 and correlation > 0.3):
-        stage = 'rising'
-        confidence = min(price_trend + inflow_trend + correlation - 1.0, 0.95)
-        reasons = [
-            "价格与资金流入同步增加",
-            "价格与资金流向呈正相关",
-            f"价格趋势强度: {price_trend_strength:.2f}, 资金流向趋势强度: {inflow_trend_strength:.2f}"
-        ]
+        params = {
+            "symbol": symbol,
+            "limit": limit
+        }
 
-    # 下跌中特征
-    elif (price_trend < 0.4 and inflow_trend < 0.4 and correlation > 0.3):
-        stage = 'falling'
-        confidence = min(1.0 - price_trend - inflow_trend + correlation, 0.95)
-        reasons = [
-            "价格与资金流入同步减少",
-            "价格与资金流向呈正相关",
-            f"价格趋势强度: {price_trend_strength:.2f}, 资金流向趋势强度: {inflow_trend_strength:.2f}"
-        ]
+        response = requests.get(f"{base_url}{endpoint}", params=params)
+        response.raise_for_status()
 
-    # 整理阶段特征
-    elif (abs(price_trend - 0.5) < 0.15 and price_volatility < 0.01):
-        stage = 'consolidation'
-        confidence = 0.5 + (0.15 - abs(price_trend - 0.5)) * 3
-        reasons = [
-            "价格波动率低",
-            "无明显趋势",
-            f"价格波动率: {price_volatility:.4f}"
-        ]
+        orderbook = response.json()
 
-    # 其他情况，根据趋势强度判断
+        # 处理订单簿数据
+        bids = [[float(price), float(qty)] for price, qty in orderbook["bids"]]
+        asks = [[float(price), float(qty)] for price, qty in orderbook["asks"]]
+
+        # 计算买卖盘总量
+        total_bid_qty = sum(bid[1] for bid in bids)
+        total_ask_qty = sum(ask[1] for ask in asks)
+
+        # 计算买卖盘不平衡度
+        imbalance = (total_bid_qty - total_ask_qty) / (total_bid_qty + total_ask_qty) if (
+                                                                                                     total_bid_qty + total_ask_qty) > 0 else 0
+
+        # 计算买卖盘压力
+        bid_pressure = sum(bid[0] * bid[1] for bid in bids)
+        ask_pressure = sum(ask[0] * ask[1] for ask in asks)
+
+        # 计算买卖盘压力比
+        pressure_ratio = bid_pressure / ask_pressure if ask_pressure > 0 else float('inf')
+
+        # 计算价格范围
+        bid_prices = [bid[0] for bid in bids]
+        ask_prices = [ask[0] for ask in asks]
+
+        price_range = {
+            "highest_bid": max(bid_prices) if bid_prices else 0,
+            "lowest_ask": min(ask_prices) if ask_prices else 0,
+            "spread": min(ask_prices) - max(bid_prices) if bid_prices and ask_prices else 0,
+            "spread_pct": (
+                        (min(ask_prices) - max(bid_prices)) / max(bid_prices) * 100) if bid_prices and ask_prices else 0
+        }
+
+        return {
+            "total_bid_qty": total_bid_qty,
+            "total_ask_qty": total_ask_qty,
+            "imbalance": imbalance,
+            "bid_pressure": bid_pressure,
+            "ask_pressure": ask_pressure,
+            "pressure_ratio": pressure_ratio,
+            "price_range": price_range
+        }
+
+    except Exception as e:
+        logger.error(f"获取订单簿数据出错: {e}")
+        raise Exception(f"获取{symbol}订单簿数据失败: {str(e)}")
+
+
+def analyze_funding_flow_trend(klines_data, window_size=10):
+    """分析资金流向趋势"""
+    if not klines_data or len(klines_data) < window_size:
+        return {
+            "trend": "unknown",
+            "confidence": 0,
+            "net_inflow_total": 0,
+            "net_inflow_recent": 0,
+            "price_stage": "unknown"
+        }
+
+    # 计算总净流入
+    net_inflow_total = sum(k["net_inflow"] for k in klines_data)
+
+    # 计算最近窗口的净流入
+    net_inflow_recent = sum(k["net_inflow"] for k in klines_data[-window_size:])
+
+    # 计算净流入的移动平均
+    window_inflows = []
+    for i in range(len(klines_data) - window_size + 1):
+        window_inflow = sum(k["net_inflow"] for k in klines_data[i:i + window_size])
+        window_inflows.append(window_inflow)
+
+    # 确定趋势
+    trend = "neutral"
+    if len(window_inflows) >= 3:
+        recent_inflows = window_inflows[-3:]
+        if all(x > 0 for x in recent_inflows) and recent_inflows[-1] > recent_inflows[-2]:
+            trend = "increasing"
+        elif all(x < 0 for x in recent_inflows) and recent_inflows[-1] < recent_inflows[-2]:
+            trend = "decreasing"
+        elif sum(1 for x in recent_inflows if x > 0) >= 2:
+            trend = "slightly_increasing"
+        elif sum(1 for x in recent_inflows if x < 0) >= 2:
+            trend = "slightly_decreasing"
+
+    # 计算趋势置信度
+    if trend in ["increasing", "decreasing"]:
+        confidence = 0.8
+    elif trend in ["slightly_increasing", "slightly_decreasing"]:
+        confidence = 0.6
     else:
-        if price_trend > 0.5:
-            if inflow_trend > 0.5:
-                stage = 'rising'
-                confidence = (price_trend + inflow_trend) / 2
-                reasons = ["价格和资金流向均呈上升趋势"]
-            else:
-                stage = 'weakening_rise'
-                confidence = price_trend * (1 - inflow_trend)
-                reasons = ["价格上升但资金流向减弱"]
+        confidence = 0.4
+
+    # 判断价格所处阶段
+    price_stage = "unknown"
+    if len(klines_data) >= 20:
+        recent_prices = [k["close"] for k in klines_data[-20:]]
+        price_changes = [recent_prices[i] - recent_prices[i - 1] for i in range(1, len(recent_prices))]
+
+        # 计算价格变化的移动平均
+        price_ma = sum(recent_prices) / len(recent_prices)
+        latest_price = recent_prices[-1]
+
+        # 计算价格波动率
+        price_volatility = np.std(price_changes) / price_ma if price_ma > 0 else 0
+
+        # 判断价格阶段
+        if latest_price > price_ma * 1.05 and trend in ["increasing", "slightly_increasing"]:
+            price_stage = "上涨中"
+        elif latest_price < price_ma * 0.95 and trend in ["decreasing", "slightly_decreasing"]:
+            price_stage = "下跌中"
+        elif price_volatility < 0.01 and abs(latest_price - price_ma) / price_ma < 0.02:
+            price_stage = "整理中"
+        elif latest_price > price_ma * 1.08 and trend in ["decreasing", "slightly_decreasing"]:
+            price_stage = "可能顶部"
+        elif latest_price < price_ma * 0.92 and trend in ["increasing", "slightly_increasing"]:
+            price_stage = "可能底部"
         else:
-            if inflow_trend < 0.5:
-                stage = 'falling'
-                confidence = (1 - price_trend + 1 - inflow_trend) / 2
-                reasons = ["价格和资金流向均呈下降趋势"]
-            else:
-                stage = 'weakening_fall'
-                confidence = (1 - price_trend) * inflow_trend
-                reasons = ["价格下降但资金流向增强"]
+            price_stage = "波动中"
 
     return {
-        'trend': stage,
-        'confidence': confidence,
-        'description': f"价格可能处于{stage}阶段，置信度{confidence:.2f}",
-        'reasons': reasons,
-        'metrics': {
-            'price_trend': price_trend,
-            'price_trend_direction': price_trend_direction,
-            'price_trend_strength': price_trend_strength,
-            'price_trend_p_value': p_value,
-            'inflow_trend': inflow_trend,
-            'inflow_trend_direction': inflow_trend_direction,
-            'inflow_trend_strength': inflow_trend_strength,
-            'inflow_trend_p_value': inflow_p_value,
-            'correlation': correlation,
-            'inflow_volume_correlation': inflow_volume_corr,
-            'price_volatility': price_volatility,
-            'recent_inflow_trend': recent_inflow_trend
-        }
+        "trend": trend,
+        "confidence": confidence,
+        "net_inflow_total": net_inflow_total,
+        "net_inflow_recent": net_inflow_recent,
+        "price_stage": price_stage
     }
 
 
-def detect_anomalies(klines_data: List[Dict]) -> List[Dict]:
-    """检测资金流向和价格变动的异常"""
-    if not klines_data or len(klines_data) < 5:
-        return []
+def detect_anomalies(klines_data, window_size=10, threshold=2.0):
+    """检测异常交易"""
+    if not klines_data or len(klines_data) < window_size * 2:
+        return {
+            "has_anomalies": False,
+            "anomalies": []
+        }
 
     anomalies = []
 
-    # 按时间排序
-    sorted_data = sorted(klines_data, key=lambda x: x['timestamp'])
+    # 计算成交量和净流入的均值和标准差
+    volumes = [k["volume"] for k in klines_data]
+    inflows = [k["net_inflow"] for k in klines_data]
 
-    # 计算成交量和价格变化的均值和标准差
-    volumes = [k['quote_volume'] for k in sorted_data]
-    price_changes = [abs(sorted_data[i]['close'] - sorted_data[i]['open']) / sorted_data[i]['open']
-                     for i in range(len(sorted_data))]
+    volume_mean = np.mean(volumes)
+    volume_std = np.std(volumes)
+    inflow_mean = np.mean(inflows)
+    inflow_std = np.std(inflows)
 
-    vol_mean = np.mean(volumes)
-    vol_std = np.std(volumes)
-    price_change_mean = np.mean(price_changes)
-    price_change_std = np.std(price_changes)
+    # 检测异常成交量和净流入
+    for i, kline in enumerate(klines_data):
+        anomaly = {}
 
-    # 检测异常
-    for i, k in enumerate(sorted_data):
-        # 成交量异常高但价格变化不大
-        if (k['quote_volume'] > vol_mean + 2 * vol_std and
-                price_changes[i] < price_change_mean + 0.5 * price_change_std):
-            anomalies.append({
-                'timestamp': k['open_time'],
-                'type': 'high_volume_low_price_change',
-                'symbol': k['symbol'],
-                'volume': k['quote_volume'],
-                'price_change': price_changes[i],
-                'net_inflow': k['net_inflow']
-            })
+        # 检测异常成交量
+        volume_z_score = (kline["volume"] - volume_mean) / volume_std if volume_std > 0 else 0
+        if abs(volume_z_score) > threshold:
+            anomaly["volume"] = {
+                "value": kline["volume"],
+                "z_score": volume_z_score,
+                "direction": "high" if volume_z_score > 0 else "low"
+            }
 
-        # 价格变化异常大但成交量不高
-        if (price_changes[i] > price_change_mean + 2 * price_change_std and
-                k['quote_volume'] < vol_mean + 0.5 * vol_std):
-            anomalies.append({
-                'timestamp': k['open_time'],
-                'type': 'high_price_change_low_volume',
-                'symbol': k['symbol'],
-                'volume': k['quote_volume'],
-                'price_change': price_changes[i],
-                'net_inflow': k['net_inflow']
-            })
+        # 检测异常净流入
+        inflow_z_score = (kline["net_inflow"] - inflow_mean) / inflow_std if inflow_std > 0 else 0
+        if abs(inflow_z_score) > threshold:
+            anomaly["net_inflow"] = {
+                "value": kline["net_inflow"],
+                "z_score": inflow_z_score,
+                "direction": "high" if inflow_z_score > 0 else "low"
+            }
 
-        # 资金净流入异常大
-        if k['net_inflow'] > 0 and k['net_inflow'] > 0.7 * k['quote_volume']:
-            anomalies.append({
-                'timestamp': k['open_time'],
-                'type': 'extreme_net_inflow',
-                'symbol': k['symbol'],
-                'volume': k['quote_volume'],
-                'price_change': price_changes[i],
-                'net_inflow': k['net_inflow'],
-                'inflow_ratio': k['net_inflow'] / k['quote_volume'] if k['quote_volume'] > 0 else 0
-            })
+        # 检测价格和成交量不匹配的情况
+        price_change = kline["price_change_pct"]
+        if abs(price_change) > 1.0 and volume_z_score < 0:
+            anomaly["price_volume_mismatch"] = {
+                "price_change": price_change,
+                "volume_z_score": volume_z_score
+            }
 
-        # 资金净流出异常大
-        if k['net_inflow'] < 0 and abs(k['net_inflow']) > 0.7 * k['quote_volume']:
-            anomalies.append({
-                'timestamp': k['open_time'],
-                'type': 'extreme_net_outflow',
-                'symbol': k['symbol'],
-                'volume': k['quote_volume'],
-                'price_change': price_changes[i],
-                'net_inflow': k['net_inflow'],
-                'outflow_ratio': abs(k['net_inflow']) / k['quote_volume'] if k['quote_volume'] > 0 else 0
-            })
-
-    return anomalies
-
-
-def analyze_funding_pressure(klines_data: List[Dict], orderbook: Dict) -> Dict:
-    """分析资金压力，结合K线数据和订单簿数据"""
-    if not klines_data or not orderbook:
-        return {
-            'pressure': 'unknown',
-            'direction': 'neutral',
-            'strength': 0
-        }
-
-    # 按时间排序
-    sorted_data = sorted(klines_data, key=lambda x: x['timestamp'])
-
-    # 提取最近的资金流向数据
-    recent_inflows = [k['net_inflow'] for k in sorted_data[-10:]]
-    recent_volumes = [k['quote_volume'] for k in sorted_data[-10:]]
-
-    # 计算资金流向占成交量的比例
-    inflow_ratios = [inflow / volume if volume > 0 else 0 for inflow, volume in zip(recent_inflows, recent_volumes)]
-    avg_inflow_ratio = np.mean(inflow_ratios)
-
-    # 结合订单簿数据
-    volume_imbalance = orderbook.get('volume_imbalance', 0)
-    value_imbalance = orderbook.get('value_imbalance', 0)
-    near_volume_imbalance = orderbook.get('near_volume_imbalance', 0)
-
-    # 计算综合压力指标
-    pressure_score = (
-            avg_inflow_ratio * 0.4 +
-            volume_imbalance * 0.2 +
-            value_imbalance * 0.2 +
-            near_volume_imbalance * 0.2
-    )
-
-    # 判断压力方向和强度
-    if pressure_score > 0.1:
-        pressure = 'buying'
-        direction = 'bullish'
-        strength = min(pressure_score * 5, 1.0)
-    elif pressure_score < -0.1:
-        pressure = 'selling'
-        direction = 'bearish'
-        strength = min(abs(pressure_score) * 5, 1.0)
-    else:
-        pressure = 'balanced'
-        direction = 'neutral'
-        strength = abs(pressure_score) * 5
+        # 如果存在异常，添加到列表
+        if anomaly:
+            anomaly["time"] = kline["close_time"]
+            anomalies.append(anomaly)
 
     return {
-        'pressure': pressure,
-        'direction': direction,
-        'strength': strength,
-        'metrics': {
-            'avg_inflow_ratio': avg_inflow_ratio,
-            'volume_imbalance': volume_imbalance,
-            'value_imbalance': value_imbalance,
-            'near_volume_imbalance': near_volume_imbalance,
-            'pressure_score': pressure_score
+        "has_anomalies": len(anomalies) > 0,
+        "anomalies": anomalies[-5:] if anomalies else []  # 只返回最近的5个异常
+    }
+
+
+def analyze_funding_pressure(klines_data, orderbook_stats):
+    """分析资金压力"""
+    if not klines_data or not orderbook_stats:
+        return {
+            "pressure_direction": "unknown",
+            "confidence": 0,
+            "imbalance": 0
         }
+
+    # 获取订单簿不平衡度
+    imbalance = orderbook_stats["imbalance"]
+
+    # 获取最近的价格变化
+    recent_klines = klines_data[-5:] if len(klines_data) >= 5 else klines_data
+    recent_price_changes = [k["price_change_pct"] for k in recent_klines]
+    avg_price_change = sum(recent_price_changes) / len(recent_price_changes) if recent_price_changes else 0
+
+    # 判断资金压力方向
+    pressure_direction = "neutral"
+    if imbalance > 0.2 and avg_price_change > 0:
+        pressure_direction = "upward_strong"
+    elif imbalance > 0.1 and avg_price_change > 0:
+        pressure_direction = "upward"
+    elif imbalance < -0.2 and avg_price_change < 0:
+        pressure_direction = "downward_strong"
+    elif imbalance < -0.1 and avg_price_change < 0:
+        pressure_direction = "downward"
+    elif imbalance > 0.1 and avg_price_change < 0:
+        pressure_direction = "potential_reversal_up"
+    elif imbalance < -0.1 and avg_price_change > 0:
+        pressure_direction = "potential_reversal_down"
+
+    # 计算置信度
+    confidence = abs(imbalance) * 2 if abs(imbalance) < 0.5 else 1.0
+
+    return {
+        "pressure_direction": pressure_direction,
+        "confidence": confidence,
+        "imbalance": imbalance,
+        "bid_ask_ratio": orderbook_stats["pressure_ratio"]
     }
 
 
@@ -445,35 +651,93 @@ def send_to_deepseek(data):
         "Content-Type": "application/json"
     }
 
+    # 根据不同时间间隔设置相应的分析参数
+    interval_settings = {
+        "5m": {
+            "forecast_period": "未来2-6小时",
+            "trade_horizon": "短线（数小时内）",
+            "stop_loss_range": "较小（0.5%-1.5%）",
+            "analysis_depth": "微观市场结构和短期波动",
+            "position_sizing": "建议小仓位（5%-15%）"
+        },
+        "15m": {
+            "forecast_period": "未来6-12小时",
+            "trade_horizon": "短线至中短线（半天至1天）",
+            "stop_loss_range": "中小（1%-2%）",
+            "analysis_depth": "短期趋势和支撑阻力位",
+            "position_sizing": "建议小至中等仓位（10%-20%）"
+        },
+        "30m": {
+            "forecast_period": "未来12-24小时",
+            "trade_horizon": "中短线（1-2天）",
+            "stop_loss_range": "中等（1.5%-3%）",
+            "analysis_depth": "日内趋势和关键价格区间",
+            "position_sizing": "建议中等仓位（15%-25%）"
+        },
+        "1h": {
+            "forecast_period": "未来1-3天",
+            "trade_horizon": "中线（2-5天）",
+            "stop_loss_range": "中等（2%-4%）",
+            "analysis_depth": "中期趋势和市场结构转换",
+            "position_sizing": "建议中等仓位（20%-30%）"
+        },
+        "4h": {
+            "forecast_period": "未来3-7天",
+            "trade_horizon": "中长线（1-2周）",
+            "stop_loss_range": "中大（3%-6%）",
+            "analysis_depth": "中长期趋势和市场周期",
+            "position_sizing": "建议中至大仓位（25%-40%）"
+        },
+        "1d": {
+            "forecast_period": "未来1-4周",
+            "trade_horizon": "长线（2周-1个月）",
+            "stop_loss_range": "较大（5%-10%）",
+            "analysis_depth": "长期趋势、市场周期和宏观因素影响",
+            "position_sizing": "建议大仓位或分批建仓（30%-50%）"
+        }
+    }
+
+    # 获取当前时间间隔的设置
+    interval_key = st.session_state.interval.lower()
+    if interval_key not in interval_settings:
+        interval_key = "1h"  # 默认使用1小时设置
+
+    settings = interval_settings[interval_key]
+
     prompt = (
-            "## Binance资金流向专业分析任务\n\n"
-            "我已收集了Binance现货和期货市场过去50根5分钟K线的资金流向数据（已剔除最新未完成的一根），包括：\n"
+            f"## Binance资金流向专业分析任务 (K线周期: {st.session_state.interval})\n\n"
+            f"我已收集了Binance现货和期货市场过去50根{st.session_state.interval}K线的资金流向数据（已剔除最新未完成的一根），包括：\n"
             "- 各交易对的资金流向趋势分析\n"
             "- 价格所处阶段预测（顶部、底部、上涨中、下跌中、整理中）\n"
             "- 订单簿数据（买卖盘不平衡度）\n"
             "- 资金压力分析\n"
             "- 异常交易检测\n\n"
 
-            "请从专业交易员和机构投资者角度进行深度分析：\n\n"
+            f"请从专业交易员和机构投资者角度，针对{st.session_state.interval}周期特点进行深度分析：\n\n"
 
             "1. **主力资金行为解读**：\n"
             "   - 通过资金流向趋势变化，识别主力资金的建仓、出货行为\n"
             "   - 结合订单簿数据，分析主力资金的意图（吸筹、出货、洗盘等）\n"
-            "   - 特别关注资金流向与价格变化不匹配的异常情况\n\n"
+            "   - 特别关注资金流向与价格变化不匹配的异常情况\n"
+            f"   - 重点分析{settings['analysis_depth']}\n\n"
 
             "2. **价格阶段判断**：\n"
             "   - 根据资金流向趋势和价格关系，判断各交易对处于什么阶段（顶部、底部、上涨中、下跌中、整理中）\n"
             "   - 提供判断的置信度和依据\n"
-            "   - 对比不同交易对的阶段差异，分析可能的轮动关系\n\n"
+            "   - 对比不同交易对的阶段差异，分析可能的轮动关系\n"
+            f"   - 结合{st.session_state.interval}周期特有的市场结构特征\n\n"
 
-            "3. **短期趋势预判**：\n"
-            "   - 基于资金流向和资金压力分析，预判未来4-8小时可能的价格走势\n"
+            "3. **趋势预判**：\n"
+            f"   - 基于资金流向和资金压力分析，预判{settings['forecast_period']}可能的价格走势\n"
             "   - 识别可能的反转信号或趋势延续信号\n"
-            "   - 关注异常交易数据可能暗示的短期行情变化\n\n"
+            "   - 关注异常交易数据可能暗示的行情变化\n"
+            f"   - 给出具体的价格目标区间和时间预期\n\n"
 
             "4. **交易策略建议**：\n"
             "   - 针对每个交易对，给出具体的交易建议（观望、做多、做空、减仓等）\n"
-            "   - 提供可能的入场点位和止损位\n"
+            f"   - 提供适合{settings['trade_horizon']}的入场点位和止损位\n"
+            f"   - 建议止损范围：{settings['stop_loss_range']}\n"
+            f"   - {settings['position_sizing']}\n"
             "   - 评估风险和回报比\n\n"
 
             "请使用专业术语，保持分析简洁但深入，避免泛泛而谈。数据如下：\n\n" +
@@ -495,202 +759,182 @@ def send_to_deepseek(data):
         return result['choices'][0]['message']['content']
     except Exception as e:
         logger.error(f"DeepSeek API error: {e}")
-        return "无法获取DeepSeek分析结果"
+        raise Exception(f"AI分析失败: {str(e)}")
 
 
-def cache_data(data, filename):
-    with open(filename, 'wb') as f:
-        pickle.dump(data, f)
+def run_analysis(symbols):
+    """运行完整的分析流程并返回结果"""
+    logger.info(f"开始分析，当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"目标交易对: {symbols}")
+    logger.info(f"选择的时间间隔: {st.session_state.interval}")
 
+    # 创建进度条
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-def load_cached_data(filename):
     try:
-        with open(filename, 'rb') as f:
-            return pickle.load(f)
-    except FileNotFoundError:
-        return None
+        # 获取现货和期货的K线数据
+        status_text.text(f"正在获取{st.session_state.interval}周期K线数据...")
+        spot_klines_data = {}
+        futures_klines_data = {}
 
+        for i, symbol in enumerate(symbols):
+            status_text.text(f"正在获取 {symbol} 现货{st.session_state.interval}K线数据...")
+            spot_klines_data[symbol] = get_klines_data(symbol, interval=st.session_state.interval, limit=50,
+                                                       is_futures=False)
 
-def main_optimized():
-    logger.info(f"开始运行，当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"目标交易对: {SYMBOLS}")
+            status_text.text(f"正在获取 {symbol} 期货{st.session_state.interval}K线数据...")
+            futures_klines_data[symbol] = get_klines_data(symbol, interval=st.session_state.interval, limit=50,
+                                                          is_futures=True)
 
-    # 获取现货和期货的5分钟K线数据
-    spot_klines_data = {}
-    futures_klines_data = {}
+            # 更新进度条
+            progress_bar.progress((i + 1) / (len(symbols) * 4))
 
-    for symbol in SYMBOLS:
-        logger.info(f"获取 {symbol} 现货5分钟K线数据...")
-        spot_klines_data[symbol] = get_klines_data(symbol, interval='5m', limit=50, is_futures=False)
+        # 获取订单簿数据
+        status_text.text("正在获取订单簿数据...")
+        spot_order_books = {}
+        futures_order_books = {}
 
-        logger.info(f"获取 {symbol} 期货5分钟K线数据...")
-        futures_klines_data[symbol] = get_klines_data(symbol, interval='5m', limit=50, is_futures=True)
+        for i, symbol in enumerate(symbols):
+            status_text.text(f"正在获取 {symbol} 订单簿数据...")
+            spot_order_books[symbol] = get_orderbook_stats(symbol, is_futures=False)
+            futures_order_books[symbol] = get_orderbook_stats(symbol, is_futures=True)
 
-    # 获取订单簿数据
-    logger.info("获取订单簿数据...")
-    spot_order_books = {}
-    futures_order_books = {}
+            # 更新进度条
+            progress_bar.progress(0.25 + (i + 1) / (len(symbols) * 4))
 
-    for symbol in SYMBOLS:
-        spot_order_books[symbol] = get_orderbook_stats(symbol, is_futures=False)
-        futures_order_books[symbol] = get_orderbook_stats(symbol, is_futures=True)
+        # 分析资金流向趋势
+        status_text.text("正在分析资金流向趋势...")
+        spot_trend_analysis = {}
+        futures_trend_analysis = {}
 
-    # 分析资金流向趋势
-    logger.info("分析资金流向趋势...")
-    spot_trend_analysis = {}
-    futures_trend_analysis = {}
+        for i, symbol in enumerate(symbols):
+            status_text.text(f"正在分析 {symbol} 资金流向趋势...")
+            spot_trend_analysis[symbol] = analyze_funding_flow_trend(spot_klines_data[symbol])
+            futures_trend_analysis[symbol] = analyze_funding_flow_trend(futures_klines_data[symbol])
 
-    for symbol in SYMBOLS:
-        spot_trend_analysis[symbol] = analyze_funding_flow_trend(spot_klines_data[symbol])
-        futures_trend_analysis[symbol] = analyze_funding_flow_trend(futures_klines_data[symbol])
+            # 更新进度条
+            progress_bar.progress(0.5 + (i + 1) / (len(symbols) * 4))
 
-    # 检测异常交易
-    logger.info("检测异常交易...")
-    spot_anomalies = {}
-    futures_anomalies = {}
+        # 检测异常交易
+        status_text.text("正在检测异常交易...")
+        spot_anomalies = {}
+        futures_anomalies = {}
 
-    for symbol in SYMBOLS:
-        spot_anomalies[symbol] = detect_anomalies(spot_klines_data[symbol])
-        futures_anomalies[symbol] = detect_anomalies(futures_klines_data[symbol])
+        for i, symbol in enumerate(symbols):
+            status_text.text(f"正在检测 {symbol} 异常交易...")
+            spot_anomalies[symbol] = detect_anomalies(spot_klines_data[symbol])
+            futures_anomalies[symbol] = detect_anomalies(futures_klines_data[symbol])
 
-    # 分析资金压力
-    logger.info("分析资金压力...")
-    spot_funding_pressure = {}
-    futures_funding_pressure = {}
+            # 更新进度条
+            progress_bar.progress(0.75 + (i + 1) / (len(symbols) * 4))
 
-    for symbol in SYMBOLS:
-        if symbol in spot_order_books and spot_order_books[symbol]:
-            spot_funding_pressure[symbol] = analyze_funding_pressure(spot_klines_data[symbol], spot_order_books[symbol])
+        # 分析资金压力
+        status_text.text("正在分析资金压力...")
+        spot_pressure_analysis = {}
+        futures_pressure_analysis = {}
 
-        if symbol in futures_order_books and futures_order_books[symbol]:
-            futures_funding_pressure[symbol] = analyze_funding_pressure(futures_klines_data[symbol],
-                                                                        futures_order_books[symbol])
+        for i, symbol in enumerate(symbols):
+            status_text.text(f"正在分析 {symbol} 资金压力...")
+            spot_pressure_analysis[symbol] = analyze_funding_pressure(spot_klines_data[symbol],
+                                                                      spot_order_books[symbol])
+            futures_pressure_analysis[symbol] = analyze_funding_pressure(futures_klines_data[symbol],
+                                                                         futures_order_books[symbol])
 
-    # 准备DeepSeek数据
-    deepseek_data = {
-        "spot_klines_summary": {
-            symbol: {
-                "count": len(data),
-                "time_range": f"{data[0]['open_time']} to {data[-1]['close_time']}" if data else "No data",
-                "latest_price": data[-1]['close'] if data else None,
-                "price_change_pct": ((data[-1]['close'] - data[0]['open']) / data[0]['open'] * 100) if data else None
-            } for symbol, data in spot_klines_data.items()
-        },
-        "futures_klines_summary": {
-            symbol: {
-                "count": len(data),
-                "time_range": f"{data[0]['open_time']} to {data[-1]['close_time']}" if data else "No data",
-                "latest_price": data[-1]['close'] if data else None,
-                "price_change_pct": ((data[-1]['close'] - data[0]['open']) / data[0]['open'] * 100) if data else None
-            } for symbol, data in futures_klines_data.items()
-        },
-        "spot_trend_analysis": spot_trend_analysis,
-        "futures_trend_analysis": futures_trend_analysis,
-        "spot_anomalies": spot_anomalies,
-        "futures_anomalies": futures_anomalies,
-        "spot_funding_pressure": spot_funding_pressure,
-        "futures_funding_pressure": futures_funding_pressure,
-        "spot_order_books": {k: v for k, v in spot_order_books.items() if v is not None},
-        "futures_order_books": {k: v for k, v in futures_order_books.items() if v is not None}
-    }
+        # 整合数据
+        status_text.text("正在整合分析数据...")
+        analysis_data = {}
 
-    # 添加现货和期货的资金流向对比数据
-    funding_flow_comparison = {}
-    for symbol in SYMBOLS:
-        spot_data = spot_klines_data.get(symbol, [])
-        futures_data = futures_klines_data.get(symbol, [])
-
-        if spot_data and futures_data:
-            # 获取最近10个周期的资金流向数据
-            recent_spot_inflows = [k['net_inflow'] for k in spot_data[-10:]]
-            recent_futures_inflows = [k['net_inflow'] for k in futures_data[-10:]]
-
-            # 计算现货和期货资金流向的差异
-            spot_total_inflow = sum(recent_spot_inflows)
-            futures_total_inflow = sum(recent_futures_inflows)
-            flow_difference = spot_total_inflow - futures_total_inflow
-
-            # 计算现货和期货资金流向的相关性
-            if len(recent_spot_inflows) == len(recent_futures_inflows) and len(recent_spot_inflows) > 1:
-                correlation = np.corrcoef(recent_spot_inflows, recent_futures_inflows)[0, 1]
-            else:
-                correlation = None
-
-            funding_flow_comparison[symbol] = {
-                "spot_total_inflow": spot_total_inflow,
-                "futures_total_inflow": futures_total_inflow,
-                "flow_difference": flow_difference,
-                "correlation": correlation,
-                "dominant_market": "spot" if spot_total_inflow > futures_total_inflow else "futures",
-                "flow_ratio": abs(spot_total_inflow / futures_total_inflow) if futures_total_inflow != 0 else float(
-                    'inf')
+        for symbol in symbols:
+            analysis_data[symbol] = {
+                "spot": {
+                    "klines_summary": {
+                        "first_time": spot_klines_data[symbol][0]["open_time"] if spot_klines_data[symbol] else None,
+                        "last_time": spot_klines_data[symbol][-1]["close_time"] if spot_klines_data[symbol] else None,
+                        "price_change": (spot_klines_data[symbol][-1]["close"] - spot_klines_data[symbol][0]["open"]) /
+                                        spot_klines_data[symbol][0]["open"] * 100 if spot_klines_data[symbol] else 0,
+                        "current_price": spot_klines_data[symbol][-1]["close"] if spot_klines_data[symbol] else 0,
+                        "total_volume": sum(k["volume"] for k in spot_klines_data[symbol]) if spot_klines_data[
+                            symbol] else 0,
+                        "total_quote_volume": sum(k["quote_volume"] for k in spot_klines_data[symbol]) if
+                        spot_klines_data[symbol] else 0
+                    },
+                    "funding_trend": spot_trend_analysis[symbol],
+                    "anomalies": spot_anomalies[symbol],
+                    "order_book": spot_order_books[symbol],
+                    "funding_pressure": spot_pressure_analysis[symbol]
+                },
+                "futures": {
+                    "klines_summary": {
+                        "first_time": futures_klines_data[symbol][0]["open_time"] if futures_klines_data[
+                            symbol] else None,
+                        "last_time": futures_klines_data[symbol][-1]["close_time"] if futures_klines_data[
+                            symbol] else None,
+                        "price_change": (futures_klines_data[symbol][-1]["close"] - futures_klines_data[symbol][0][
+                            "open"]) / futures_klines_data[symbol][0]["open"] * 100 if futures_klines_data[
+                            symbol] else 0,
+                        "current_price": futures_klines_data[symbol][-1]["close"] if futures_klines_data[symbol] else 0,
+                        "total_volume": sum(k["volume"] for k in futures_klines_data[symbol]) if futures_klines_data[
+                            symbol] else 0,
+                        "total_quote_volume": sum(k["quote_volume"] for k in futures_klines_data[symbol]) if
+                        futures_klines_data[symbol] else 0
+                    },
+                    "funding_trend": futures_trend_analysis[symbol],
+                    "anomalies": futures_anomalies[symbol],
+                    "order_book": futures_order_books[symbol],
+                    "funding_pressure": futures_pressure_analysis[symbol]
+                },
+                "comparison": {
+                    "spot_vs_futures_price_diff": (spot_klines_data[symbol][-1]["close"] -
+                                                   futures_klines_data[symbol][-1]["close"]) /
+                                                  spot_klines_data[symbol][-1]["close"] * 100 if spot_klines_data[
+                                                                                                     symbol] and
+                                                                                                 futures_klines_data[
+                                                                                                     symbol] else 0,
+                    "spot_vs_futures_volume_ratio": sum(k["volume"] for k in spot_klines_data[symbol]) / sum(
+                        k["volume"] for k in futures_klines_data[symbol]) if spot_klines_data[symbol] and
+                                                                             futures_klines_data[symbol] and sum(
+                        k["volume"] for k in futures_klines_data[symbol]) > 0 else 0,
+                    "spot_vs_futures_net_inflow_diff": spot_trend_analysis[symbol]["net_inflow_total"] -
+                                                       futures_trend_analysis[symbol]["net_inflow_total"] if
+                    spot_trend_analysis[symbol] and futures_trend_analysis[symbol] else 0
+                }
             }
 
-    deepseek_data["funding_flow_comparison"] = funding_flow_comparison
+        # 添加分析时间和参数信息
+        analysis_metadata = {
+            "analysis_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "interval": st.session_state.interval,
+            "symbols_analyzed": symbols,
+            "klines_count": 50
+        }
 
-    # 添加价格与资金流向的领先/滞后关系分析
-    lead_lag_analysis = {}
-    for symbol in SYMBOLS:
-        spot_data = spot_klines_data.get(symbol, [])
+        # 整合所有数据
+        deepseek_data = {
+            "metadata": analysis_metadata,
+            "analysis": analysis_data
+        }
 
-        if len(spot_data) > 10:
-            prices = [k['close'] for k in spot_data]
-            inflows = [k['net_inflow'] for k in spot_data]
+        # 发送到DeepSeek进行解读
+        status_text.text("正在通过AI解读分析结果...")
+        deepseek_result = send_to_deepseek(deepseek_data)
 
-            # 计算不同滞后期的相关性
-            correlations = []
-            for lag in range(-5, 6):  # 从-5到5的滞后期
-                if lag < 0:
-                    # 资金流向领先于价格
-                    corr = np.corrcoef(inflows[:lag], prices[-lag:])[0, 1]
-                elif lag > 0:
-                    # 价格领先于资金流向
-                    corr = np.corrcoef(inflows[lag:], prices[:-lag])[0, 1]
-                else:
-                    # 同期相关性
-                    corr = np.corrcoef(inflows, prices)[0, 1]
+        # 清除进度条和状态文本
+        progress_bar.empty()
+        status_text.empty()
 
-                correlations.append((lag, corr))
+        return deepseek_result
 
-            # 找出最大相关性的滞后期
-            max_corr_lag = max(correlations, key=lambda x: abs(x[1]))
-
-            lead_lag_analysis[symbol] = {
-                "max_correlation": max_corr_lag[1],
-                "optimal_lag": max_corr_lag[0],
-                "relationship": "资金流向领先于价格" if max_corr_lag[0] < 0 else "价格领先于资金流向" if max_corr_lag[
-                                                                                                             0] > 0 else "同步变化",
-                "all_correlations": correlations
-            }
-
-    deepseek_data["lead_lag_analysis"] = lead_lag_analysis
-
-    # 格式化数值
-    for symbol in SYMBOLS:
-        if symbol in deepseek_data["spot_klines_summary"]:
-            if deepseek_data["spot_klines_summary"][symbol]["latest_price"]:
-                deepseek_data["spot_klines_summary"][symbol]["latest_price"] = format_number(
-                    deepseek_data["spot_klines_summary"][symbol]["latest_price"])
-
-        if symbol in deepseek_data["futures_klines_summary"]:
-            if deepseek_data["futures_klines_summary"][symbol]["latest_price"]:
-                deepseek_data["futures_klines_summary"][symbol]["latest_price"] = format_number(
-                    deepseek_data["futures_klines_summary"][symbol]["latest_price"])
-
-    # 发送分析请求
-    logger.info("正在请求DeepSeek API进行数据解读...")
-    analysis = send_to_deepseek(deepseek_data)
-
-    # 保存结果
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    with open(f"binance_analysis.md", "w", encoding="utf-8") as f:
-        f.write(analysis)
-    logger.info(f"分析结果已保存到 binance_analysis_{timestamp}.md")
-
-    # 打印分析结果
-    print("\n分析结果:")
-    print(analysis)
+    except Exception as e:
+        # 清除进度条和状态文本
+        progress_bar.empty()
+        status_text.empty()
+        # 重新抛出异常，让上层处理
+        raise e
 
 
+# 主程序入口
 if __name__ == "__main__":
-    main_optimized()
+    # 所有逻辑都在上面实现了
+    pass
+
