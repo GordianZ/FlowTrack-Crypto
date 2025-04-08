@@ -2,8 +2,8 @@ FROM python:3
 
 WORKDIR /usr/src/app
 
-RUN pip install requests pandas numpy streamlit 
+RUN pip install requests numpy flask
 
 COPY . .
 
-CMD [ "streamlit", "run", "./binance_funding_flow_analyzer.py" ]
+CMD [ "flask", "--app", "./binance_funding_flow_analyzer.py", "run" ]

@@ -1,12 +1,21 @@
-import streamlit as st
-import requests
 import json
-import time
-import numpy as np
-import pandas as pd
 import logging
-from datetime import datetime, timedelta
 import os
+from datetime import datetime
+
+import numpy as np
+import requests
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route("/")
+def hello_world():
+    return "<p>Hello, World!</p>"
+@app.route('/analysis/<interval>/<symbol>')
+def analysis(symbol,interval):
+    # show the post with the given id, the id is an integer
+    return run_analysis(symbol.split(),interval)
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -17,301 +26,6 @@ BINANCE_API_URL = "https://api.binance.com"
 BINANCE_FUTURES_API_URL = "https://fapi.binance.com"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "api信息")
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
-
-# 设置页面标题和布局
-st.set_page_config(
-    page_title="币安资金流向分析",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# 自定义CSS，使界面更专业
-st.markdown("""
-<style>
-    /* 整体主题 */
-    .main {
-        background-color: #0e1117;
-        color: #d1d1d1;
-    }
-
-    /* 标题样式 */
-    h1, h2, h3 {
-        color: #4da6ff;
-        font-weight: 600;
-        margin-bottom: 1.5rem;
-    }
-
-    h1 {
-        border-bottom: 2px solid #4da6ff;
-        padding-bottom: 0.5rem;
-    }
-
-    /* 按钮样式 */
-    .stButton>button {
-        background-color: #2e6da4;
-        color: white;
-        border-radius: 4px;
-        border: none;
-        padding: 0.5rem 1rem;
-        font-weight: 500;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-        transition: all 0.2s ease;
-    }
-
-    .stButton>button:hover {
-        background-color: #1c4c7d;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.4);
-        transform: translateY(-1px);
-    }
-
-    /* 侧边栏样式 */
-    .css-1d391kg {
-        background-color: #171c2e;
-        border-right: 1px solid #2c3454;
-    }
-
-    /* 进度条样式 */
-    .stProgress > div > div {
-        background-color: #4da6ff;
-    }
-
-    /* 数据框样式 */
-    div[data-testid="stDataFrame"] {
-        border: 1px solid #2c3454;
-        border-radius: 5px;
-        padding: 1px;
-    }
-
-    /* 卡片样式 */
-    div.stBlock {
-        border: 1px solid #2c3454;
-        border-radius: 5px;
-        padding: 1.5rem;
-        margin-bottom: 1rem;
-        background-color: #1a1f36;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    }
-
-    /* 输入框样式 */
-    .stTextInput>div>div>input {
-        background-color: #171c2e;
-        color: #d1d1d1;
-        border: 1px solid #2c3454;
-        border-radius: 4px;
-    }
-
-    /* 选择框样式 */
-    .stSelectbox>div>div>div {
-        background-color: #171c2e;
-        color: #d1d1d1;
-        border: 1px solid #2c3454;
-    }
-
-    /* 标签样式 */
-    .symbol-tag {
-        display: inline-block;
-        background-color: #2e6da4;
-        color: white;
-        padding: 0.3rem 0.6rem;
-        margin: 0.2rem;
-        border-radius: 4px;
-        font-size: 0.9rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-    }
-
-    /* 分析结果容器 */
-    .analysis-container {
-        background-color: #1a1f36;
-        border: 1px solid #2c3454;
-        border-radius: 5px;
-        padding: 1.5rem;
-        margin-top: 1rem;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    }
-
-    /* 表格样式 */
-    table {
-        width: 100%;
-        border-collapse: collapse;
-        margin: 1rem 0;
-    }
-
-    th, td {
-        padding: 0.75rem;
-        border: 1px solid #2c3454;
-    }
-
-    th {
-        background-color: #171c2e;
-        color: #4da6ff;
-        font-weight: 500;
-    }
-
-    tr:nth-child(even) {
-        background-color: #171c2e;
-    }
-
-    /* 代码块样式 */
-    code {
-        background-color: #171c2e;
-        color: #4da6ff;
-        padding: 0.2rem 0.4rem;
-        border-radius: 3px;
-        font-size: 0.9em;
-    }
-
-    /* 链接样式 */
-    a {
-        color: #4da6ff;
-        text-decoration: none;
-    }
-
-    a:hover {
-        text-decoration: underline;
-    }
-
-    /* 分隔线样式 */
-    hr {
-        border: none;
-        height: 1px;
-        background-color: #2c3454;
-        margin: 2rem 0;
-    }
-
-    /* 警告和错误信息样式 */
-    .stAlert {
-        background-color: #1a1f36;
-        border: 1px solid #ff4b4b;
-        color: #ff4b4b;
-    }
-
-    /* 信息提示样式 */
-    .stInfo {
-        background-color: #1a1f36;
-        border: 1px solid #4da6ff;
-        color: #4da6ff;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# 初始化会话状态
-if 'symbols' not in st.session_state:
-    st.session_state.symbols = ["BTCUSDT", "ETHUSDT"]
-if 'started_analysis' not in st.session_state:
-    st.session_state.started_analysis = False
-if 'analysis_results' not in st.session_state:
-    st.session_state.analysis_results = None
-if 'new_symbol' not in st.session_state:
-    st.session_state.new_symbol = ""
-if 'interval' not in st.session_state:
-    st.session_state.interval = '5m'
-if 'error_message' not in st.session_state:
-    st.session_state.error_message = None
-
-
-# 添加交易对函数
-def add_symbol():
-    if st.session_state.new_symbol and st.session_state.new_symbol.strip():
-        symbol = st.session_state.new_symbol.strip().upper()
-        if symbol not in st.session_state.symbols:
-            st.session_state.symbols.append(symbol)
-        st.session_state.new_symbol = ""
-
-
-# 删除交易对函数
-def remove_symbol(symbol):
-    if symbol in st.session_state.symbols:
-        st.session_state.symbols.remove(symbol)
-        st.rerun()
-
-
-# 开始分析函数
-def start_analysis():
-    st.session_state.error_message = None
-    if st.session_state.symbols:
-        st.session_state.started_analysis = True
-        try:
-            # 这里调用您的分析函数
-            results = run_analysis(st.session_state.symbols)
-            st.session_state.analysis_results = results
-        except Exception as e:
-            st.session_state.error_message = f"分析过程中发生错误: {str(e)}"
-            logger.error(f"分析错误: {e}", exc_info=True)
-    else:
-        st.session_state.error_message = "请至少添加一个交易对"
-
-
-
-
-# 侧边栏
-st.sidebar.title("分析设置")
-
-# 在侧边栏中添加时间间隔选择
-st.sidebar.subheader("K线时间间隔")
-interval_options = ["5m", "15m", "30m", "1h", "4h","1d"]
-selected_interval = st.sidebar.selectbox(
-    "选择时间间隔",
-    options=interval_options,
-    index=interval_options.index(st.session_state.interval)
-)
-
-# 将选择的时间间隔保存到会话状态
-st.session_state.interval = selected_interval
-
-# 添加交易对输入框和按钮 - 移至侧边栏
-st.sidebar.subheader("添加交易对")
-st.sidebar.text_input("输入交易对（例如：BTCUSDT）", key="new_symbol")
-st.sidebar.button("添加交易对", on_click=add_symbol)
-
-# 显示已添加的交易对 - 移至侧边栏
-st.sidebar.subheader("已添加的交易对")
-for symbol in st.session_state.symbols:
-    col1, col2 = st.sidebar.columns([3, 1])
-    with col1:
-        st.write(f"• {symbol}")
-    with col2:
-        if st.button("删除", key=f"del_{symbol}"):
-            remove_symbol(symbol)
-
-# 添加开始分析按钮 - 移至侧边栏
-st.sidebar.markdown("---")
-st.sidebar.button("开始分析", on_click=start_analysis, type="primary")
-
-# 显示错误信息（如果有）
-if st.session_state.error_message:
-    st.error(st.session_state.error_message)
-
-# 如果没有开始分析，显示欢迎页面
-if not st.session_state.started_analysis:
-    st.title("欢迎使用币安资金流向分析系统")
-
-    st.write("本系统可以帮助您分析币安交易所的资金流向，识别主力资金行为，判断市场趋势。")
-
-    st.header("主要功能")
-    st.markdown("- **资金流向趋势分析**：分析现货和期货市场的资金流入流出趋势")
-    st.markdown("- **主力资金行为解读**：识别主力资金的建仓、出货行为")
-    st.markdown("- **价格阶段判断**：判断各交易对处于什么阶段（顶部、底部、上涨中、下跌中、整理中）")
-    st.markdown("- **短期趋势预判**：预判未来可能的价格走势")
-    st.markdown("- **交易策略建议**：针对每个交易对，给出具体的交易建议")
-
-    st.header("使用方法")
-    st.markdown("1. 在侧边栏添加您想要分析的交易对（例如：BTCUSDT、ETHUSDT等）")
-    st.markdown("2. 选择K线时间间隔（5分钟、15分钟、30分钟、1小时、4小时，日线）")
-    st.markdown("3. 点击“开始分析”按钮，等待分析完成")
-    st.markdown("4. 等待分析完成，查看详细分析结果")
-
-# 如果已经开始分析，显示分析结果
-if st.session_state.started_analysis and st.session_state.analysis_results:
-    st.markdown("""
-    <div class="analysis-container">
-        <h2>资金流向分析结果</h2>
-        <p>分析周期：{} | 分析时间：{}</p>
-    </div>
-    """.format(st.session_state.interval, datetime.now().strftime('%Y-%m-%d %H:%M:%S')), unsafe_allow_html=True)
-
-    st.markdown(st.session_state.analysis_results)
-
 
 # 数据获取和分析函数
 def format_number(num):
@@ -644,7 +358,7 @@ def analyze_funding_pressure(klines_data, orderbook_stats):
     }
 
 
-def send_to_deepseek(data):
+def send_to_deepseek(data, interval):
     """将数据发送给DeepSeek API并获取解读"""
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -698,22 +412,22 @@ def send_to_deepseek(data):
     }
 
     # 获取当前时间间隔的设置
-    interval_key = st.session_state.interval.lower()
+    interval_key = interval.lower()
     if interval_key not in interval_settings:
         interval_key = "1h"  # 默认使用1小时设置
 
     settings = interval_settings[interval_key]
 
     prompt = (
-            f"## Binance资金流向专业分析任务 (K线周期: {st.session_state.interval})\n\n"
-            f"我已收集了Binance现货和期货市场过去50根{st.session_state.interval}K线的资金流向数据（已剔除最新未完成的一根），包括：\n"
+            f"## Binance资金流向专业分析任务 (K线周期: {interval})\n\n"
+            f"我已收集了Binance现货和期货市场过去50根{interval}K线的资金流向数据（已剔除最新未完成的一根），包括：\n"
             "- 各交易对的资金流向趋势分析\n"
             "- 价格所处阶段预测（顶部、底部、上涨中、下跌中、整理中）\n"
             "- 订单簿数据（买卖盘不平衡度）\n"
             "- 资金压力分析\n"
             "- 异常交易检测\n\n"
 
-            f"请从专业交易员和机构投资者角度，针对{st.session_state.interval}周期特点进行深度分析：\n\n"
+            f"请从专业交易员和机构投资者角度，针对{interval}周期特点进行深度分析：\n\n"
 
             "1. **主力资金行为解读**：\n"
             "   - 通过资金流向趋势变化，识别主力资金的建仓、出货行为\n"
@@ -725,7 +439,7 @@ def send_to_deepseek(data):
             "   - 根据资金流向趋势和价格关系，判断各交易对处于什么阶段（顶部、底部、上涨中、下跌中、整理中）\n"
             "   - 提供判断的置信度和依据\n"
             "   - 对比不同交易对的阶段差异，分析可能的轮动关系\n"
-            f"   - 结合{st.session_state.interval}周期特有的市场结构特征\n\n"
+            f"   - 结合{interval}周期特有的市场结构特征\n\n"
 
             "3. **趋势预判**：\n"
             f"   - 基于资金流向和资金压力分析，预判{settings['forecast_period']}可能的价格走势\n"
@@ -762,87 +476,87 @@ def send_to_deepseek(data):
         raise Exception(f"AI分析失败: {str(e)}")
 
 
-def run_analysis(symbols):
+def run_analysis(symbols, interval):
     """运行完整的分析流程并返回结果"""
     logger.info(f"开始分析，当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"目标交易对: {symbols}")
-    logger.info(f"选择的时间间隔: {st.session_state.interval}")
+    logger.info(f"选择的时间间隔: {interval}")
 
     # 创建进度条
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    # progress_bar = st.progress(0)
+    # status_text = st.empty()
 
     try:
         # 获取现货和期货的K线数据
-        status_text.text(f"正在获取{st.session_state.interval}周期K线数据...")
+        logger.info(f"正在获取{interval}周期K线数据...")
         spot_klines_data = {}
         futures_klines_data = {}
 
         for i, symbol in enumerate(symbols):
-            status_text.text(f"正在获取 {symbol} 现货{st.session_state.interval}K线数据...")
-            spot_klines_data[symbol] = get_klines_data(symbol, interval=st.session_state.interval, limit=50,
+            logger.info(f"正在获取 {symbol} 现货{interval}K线数据...")
+            spot_klines_data[symbol] = get_klines_data(symbol, interval=interval, limit=50,
                                                        is_futures=False)
 
-            status_text.text(f"正在获取 {symbol} 期货{st.session_state.interval}K线数据...")
-            futures_klines_data[symbol] = get_klines_data(symbol, interval=st.session_state.interval, limit=50,
+            logger.info(f"正在获取 {symbol} 期货{interval}K线数据...")
+            futures_klines_data[symbol] = get_klines_data(symbol, interval=interval, limit=50,
                                                           is_futures=True)
 
             # 更新进度条
-            progress_bar.progress((i + 1) / (len(symbols) * 4))
+            #progress_bar.progress((i + 1) / (len(symbols) * 4))
 
         # 获取订单簿数据
-        status_text.text("正在获取订单簿数据...")
+        logger.info("正在获取订单簿数据...")
         spot_order_books = {}
         futures_order_books = {}
 
         for i, symbol in enumerate(symbols):
-            status_text.text(f"正在获取 {symbol} 订单簿数据...")
+            logger.info(f"正在获取 {symbol} 订单簿数据...")
             spot_order_books[symbol] = get_orderbook_stats(symbol, is_futures=False)
             futures_order_books[symbol] = get_orderbook_stats(symbol, is_futures=True)
 
             # 更新进度条
-            progress_bar.progress(0.25 + (i + 1) / (len(symbols) * 4))
+            # progress_bar.progress(0.25 + (i + 1) / (len(symbols) * 4))
 
         # 分析资金流向趋势
-        status_text.text("正在分析资金流向趋势...")
+        logger.info("正在分析资金流向趋势...")
         spot_trend_analysis = {}
         futures_trend_analysis = {}
 
         for i, symbol in enumerate(symbols):
-            status_text.text(f"正在分析 {symbol} 资金流向趋势...")
+            logger.info(f"正在分析 {symbol} 资金流向趋势...")
             spot_trend_analysis[symbol] = analyze_funding_flow_trend(spot_klines_data[symbol])
             futures_trend_analysis[symbol] = analyze_funding_flow_trend(futures_klines_data[symbol])
 
             # 更新进度条
-            progress_bar.progress(0.5 + (i + 1) / (len(symbols) * 4))
+            # progress_bar.progress(0.5 + (i + 1) / (len(symbols) * 4))
 
         # 检测异常交易
-        status_text.text("正在检测异常交易...")
+        logger.info("正在检测异常交易...")
         spot_anomalies = {}
         futures_anomalies = {}
 
         for i, symbol in enumerate(symbols):
-            status_text.text(f"正在检测 {symbol} 异常交易...")
+            logger.info(f"正在检测 {symbol} 异常交易...")
             spot_anomalies[symbol] = detect_anomalies(spot_klines_data[symbol])
             futures_anomalies[symbol] = detect_anomalies(futures_klines_data[symbol])
 
             # 更新进度条
-            progress_bar.progress(0.75 + (i + 1) / (len(symbols) * 4))
+            # progress_bar.progress(0.75 + (i + 1) / (len(symbols) * 4))
 
         # 分析资金压力
-        status_text.text("正在分析资金压力...")
+        logger.info("正在分析资金压力...")
         spot_pressure_analysis = {}
         futures_pressure_analysis = {}
 
         for i, symbol in enumerate(symbols):
-            status_text.text(f"正在分析 {symbol} 资金压力...")
+            logger.info(f"正在分析 {symbol} 资金压力...")
             spot_pressure_analysis[symbol] = analyze_funding_pressure(spot_klines_data[symbol],
                                                                       spot_order_books[symbol])
             futures_pressure_analysis[symbol] = analyze_funding_pressure(futures_klines_data[symbol],
                                                                          futures_order_books[symbol])
 
         # 整合数据
-        status_text.text("正在整合分析数据...")
+        logger.info("正在整合分析数据...")
         analysis_data = {}
 
         for symbol in symbols:
@@ -904,7 +618,7 @@ def run_analysis(symbols):
         # 添加分析时间和参数信息
         analysis_metadata = {
             "analysis_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "interval": st.session_state.interval,
+            "interval": interval,
             "symbols_analyzed": symbols,
             "klines_count": 50
         }
@@ -916,19 +630,19 @@ def run_analysis(symbols):
         }
 
         # 发送到DeepSeek进行解读
-        status_text.text("正在通过AI解读分析结果...")
-        deepseek_result = send_to_deepseek(deepseek_data)
+        logger.info("正在通过AI解读分析结果...")
+        deepseek_result = send_to_deepseek(deepseek_data, interval)
 
         # 清除进度条和状态文本
-        progress_bar.empty()
-        status_text.empty()
+        # progress_bar.empty()
+        # status_text.empty()
 
         return deepseek_result
 
     except Exception as e:
         # 清除进度条和状态文本
-        progress_bar.empty()
-        status_text.empty()
+        # progress_bar.empty()
+        # status_text.empty()
         # 重新抛出异常，让上层处理
         raise e
 
